@@ -121,27 +121,34 @@ public static class StudyExcelExporter
 
         // CSV data
         int dataStartRow = 6;
-        ws.Cell(dataStartRow, 1).Value = "Timestamp";
-        ws.Cell(dataStartRow, 2).Value = "Device ID";
-        ws.Cell(dataStartRow, 3).Value = "Pressure (Torr)";
-        ws.Range(dataStartRow, 1, dataStartRow, 3).Style.Font.Bold = true;
-
         var csvPath = measurement.CsvFilePath;
+        
         if (csvPath != null && File.Exists(csvPath))
         {
             var lines = File.ReadAllLines(csvPath);
-            for (int i = 1; i < lines.Length; i++) // Skip header
+            if (lines.Length == 0) return;
+
+            // ✅ 가로 포맷의 헤더 그대로 엑셀에 작성
+            var headers = lines[0].Split(',');
+            for (int col = 0; col < headers.Length; col++)
+            {
+                ws.Cell(dataStartRow, col + 1).Value = headers[col] == "timestamp_iso" ? "Timestamp" : headers[col];
+            }
+            ws.Range(dataStartRow, 1, dataStartRow, headers.Length).Style.Font.Bold = true;
+
+            // ✅ 가로 포맷의 데이터 그대로 작성
+            for (int i = 1; i < lines.Length; i++) 
             {
                 var parts = lines[i].Split(',');
-                if (parts.Length >= 3)
+                var row = dataStartRow + i;
+                
+                for (int col = 0; col < parts.Length; col++)
                 {
-                    var row = dataStartRow + i;
-                    ws.Cell(row, 1).Value = parts[0];
-                    ws.Cell(row, 2).Value = parts[1];
-                    if (double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var pressure))
-                        ws.Cell(row, 3).Value = pressure;
+                    // 첫 번째 열(시간) 제외하고 나머지는 숫자로 변환
+                    if (col > 0 && double.TryParse(parts[col], NumberStyles.Float, CultureInfo.InvariantCulture, out var pressure))
+                        ws.Cell(row, col + 1).Value = pressure;
                     else
-                        ws.Cell(row, 3).Value = parts[2];
+                        ws.Cell(row, col + 1).Value = parts[col];
                 }
             }
         }
@@ -200,7 +207,7 @@ public static class StudyExcelExporter
             ws.Cell(row, 13).Style.NumberFormat.Format = "0.00";
             ws.Cell(row, 15).Style.NumberFormat.Format = "0.0000";
         }
-
+        ws.Column(1).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss.000";
         ws.Columns().AdjustToContents();
     }
 

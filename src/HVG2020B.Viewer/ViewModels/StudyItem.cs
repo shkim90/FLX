@@ -71,8 +71,12 @@ public partial class StudyItem : ObservableObject, IDisposable
         Measurements.Any(m => m.State == MeasurementState.Recording);
 
     /// <summary>Call after a measurement starts or stops recording to refresh UI bindings.</summary>
-    public void NotifyRecordingChanged() =>
+    public void NotifyRecordingChanged()
+    {
         OnPropertyChanged(nameof(HasRecordingMeasurement));
+        // ✅ 측정이 시작/종료될 때 요약 텍스트도 새로고침 하도록 알림 추가
+        OnPropertyChanged(nameof(MeasurementSummary)); 
+    }
 
     public int TotalSampleCount => Measurements.Sum(m => m.RecordedSampleCount);
 

@@ -20,28 +20,41 @@ public static class StudyCsvParser
         var rowsByDevice = new Dictionary<string, List<CsvRow>>();
         var deviceOrder = new List<string>();
 
-        foreach (var line in File.ReadLines(csvFilePath).Skip(1))
+        using var reader = new StreamReader(csvFilePath);
+        var headerLine = reader.ReadLine();
+        if (string.IsNullOrWhiteSpace(headerLine)) 
+            return new ParsedStudyData(deviceOrder, rowsByDevice);
+
+        // 첫 번째 줄(헤더)을 읽어서 장비 목록 파악
+        var headers = headerLine.Split(',');
+        for (int i = 1; i < headers.Length; i++)
+        {
+            var deviceId = headers[i];
+            deviceOrder.Add(deviceId);
+            rowsByDevice[deviceId] = new List<CsvRow>();
+        }
+
+        string? line;
+        while ((line = reader.ReadLine()) != null)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
-
-            var parts = line.Split(',', 3);
-            if (parts.Length < 3) continue;
+            
+            var parts = line.Split(',');
+            if (parts.Length < headers.Length) continue;
 
             if (!DateTimeOffset.TryParse(parts[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out var timestamp))
                 continue;
-            if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var pressure))
-                continue;
 
-            var deviceId = parts[1];
-
-            if (!rowsByDevice.TryGetValue(deviceId, out var list))
+            // 각 열(장비)의 데이터를 파싱
+            for (int i = 1; i < headers.Length; i++)
             {
-                list = new List<CsvRow>();
-                rowsByDevice[deviceId] = list;
-                deviceOrder.Add(deviceId);
+                var pStr = parts[i];
+                if (!string.IsNullOrWhiteSpace(pStr) && double.TryParse(pStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var pressure))
+                {
+                    var deviceId = deviceOrder[i - 1];
+                    rowsByDevice[deviceId].Add(new CsvRow(timestamp, deviceId, pressure));
+                }
             }
-
-            list.Add(new CsvRow(timestamp, deviceId, pressure));
         }
 
         return new ParsedStudyData(deviceOrder, rowsByDevice);

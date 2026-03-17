@@ -123,7 +123,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             StatusMessage = $"Migrated {migratedCount} legacy studies";
     }
 
-    #region Observable Properties
+     #region Observable Properties
+    // 사용 가능한 장비 목록과 선택된 장비
+    [ObservableProperty]
+    private ObservableCollection<string> _availableDeviceTypes = new() { "HVG-2020B", "신규 장비(NewGauge)" };
+
+    [ObservableProperty]
+    private string? _selectedDeviceType = "HVG-2020B";
+    
+    // 기존에 추가하셨던 포트 관련 변수 (유지)
+    [ObservableProperty]
+    private ObservableCollection<string> _availablePorts = new();
+
+    [ObservableProperty]
+    private string? _selectedPort;
 
     [ObservableProperty]
     private ObservableCollection<DeviceItem> _devices = new();
@@ -136,6 +149,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _statusMessage = "Ready";
+
 
     [ObservableProperty]
     private ObservableCollection<StudyItem> _studies = new();
@@ -360,7 +374,175 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _scanTimer.Stop();
         }
     }
+    [RelayCommand]
+    private async Task AutoConnectAllDevices()
+    {
+        // 현재 PC의 모든 COM 포트를 가져옵니다.
+        var ports = System.IO.Ports.SerialPort.GetPortNames().OrderBy(p => p).ToArray();
+        var connectedPorts = Devices.Where(d => d.IsConnected).Select(d => d.PortName).ToList();
 
+        int foundCount = 0;
+
+        foreach (var port in ports)
+        {
+            if (connectedPorts.Contains(port)) continue;
+
+            StatusMessage = $"{port} 장비 식별 중...";
+
+            // ==========================================
+            // 1. HVG-2020B 먼저 테스트 (포트를 안전하게 닫아주므로 먼저 실행)
+            // ==========================================
+            var hvg = new HVG2020B.Driver.HVG2020BClient();
+            try
+            {
+                var settings = HVG2020B.Driver.HVGSerialSettings.ForRs232(baudRate: 19200);
+                await hvg.ConnectAsync(port, settings);
+
+                using var cts = new CancellationTokenSource(500);
+                await hvg.ReadOnceAsync(cts.Token);
+
+                // 통과하면 2020B가 맞음!
+                RegisterDeviceToUI(hvg, port);
+                foundCount++;
+                continue; // ❗ 찾았으면 아래 Sens4 테스트는 건너뛰고 다음 포트로 이동
+            }
+            catch
+            {
+                // 아니면 안전하게 포트 닫기
+                hvg.Dispose();
+            }
+
+            // ⭐⭐⭐ [핵심] 포트가 닫히고 윈도우가 리셋할 0.5초의 시간을 줍니다. ⭐⭐⭐
+            await Task.Delay(500);
+
+            // ==========================================
+            // 2. Sens4 장비 테스트 (그 다음 순서로 실행)
+            // ==========================================
+            var sens4 = new HVG2020B.Driver.Sens4Client(); // (클래스명은 맞춰주세요)
+            try
+            {
+                await sens4.ConnectAsync(port);
+                
+                using var cts = new CancellationTokenSource(500); 
+                await sens4.ReadOnceAsync(cts.Token);
+                
+                RegisterDeviceToUI(sens4, port);
+                foundCount++;
+                continue;
+            }
+            catch
+            {
+                sens4.Dispose(); 
+            }
+            await Task.Delay(500); // 0.5초 대기
+
+            // ==========================================
+            // 3. ✨ 세 번째 장비 테스트 (새로 추가)
+            // ==========================================
+            var ccd100 = new HVG2020B.Driver.CCD100Client();
+            try
+            {
+                await ccd100.ConnectAsync(port);
+                using var cts = new CancellationTokenSource(500); 
+                await ccd100.ReadOnceAsync(cts.Token);
+                
+                // =======================================================
+                // ✅ 통과했다면(장비가 맞다면), 팝업을 띄워 사용자에게 이름을 입력받습니다!
+                string customName = PromptForDeviceName(port);
+                ccd100.SetCustomId(customName);
+                // =======================================================
+
+                RegisterDeviceToUI(ccd100, port);
+                foundCount++;
+                continue;
+            }
+            catch
+            {
+                ccd100.Dispose(); 
+            }
+            await Task.Delay(200);
+        }
+
+        StatusMessage = $"자동 식별 완료: 총 {foundCount}개의 장비가 새로 연결되었습니다.";
+    }
+    private void RegisterDeviceToUI(IGaugeDevice client, string portName)
+    {
+        var item = new DeviceItem(client) { IsConnected = true, PortName = portName };
+        Devices.Add(item);
+        item.PropertyChanged += OnDeviceItemPropertyChanged;
+        EnsureDeviceSeries(item.DeviceId);
+        SelectedDevice ??= item;
+
+        if (_managedDeviceIds.Add(item.DeviceId))
+        {
+            _deviceManager.AddDevice(item.Device);
+        }
+
+        if (CurrentState == ViewerState.Disconnected)
+        {
+            CurrentState = ViewerState.Live;
+            _startTime = DateTime.Now;
+            _sampleCount = 0;
+        }
+    }
+
+    private string PromptForDeviceName(string portName)
+    {
+        string inputName = $"CCD100_{portName}"; // 미입력 시 기본값
+
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var window = new Window
+            {
+                Title = "장비 이름 설정", Width = 350, Height = 180,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ResizeMode = ResizeMode.NoResize,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(30, 30, 30))
+            };
+
+            var stack = new System.Windows.Controls.StackPanel { Margin = new Thickness(15) };
+            
+            var text = new System.Windows.Controls.TextBlock 
+            { 
+                Text = $"{portName} 포트에 CCD-100 장비가 감지되었습니다.\n구분을 위한 장비 이름을 입력해 주세요.", 
+                Foreground = System.Windows.Media.Brushes.White, 
+                Margin = new Thickness(0, 0, 0, 10), TextWrapping = TextWrapping.Wrap
+            };
+            
+            var textBox = new System.Windows.Controls.TextBox 
+            { 
+                Text = "", 
+                Padding = new Thickness(6), FontSize = 14,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(56, 56, 56)),
+                Foreground = System.Windows.Media.Brushes.White,
+                BorderBrush = System.Windows.Media.Brushes.Gray
+            };
+            
+            var btn = new System.Windows.Controls.Button 
+            { 
+                Content = "확인(Enter)", Margin = new Thickness(0, 15, 0, 0), Width = 100, Padding = new Thickness(6),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(33, 150, 243)),
+                Foreground = System.Windows.Media.Brushes.White, IsDefault = true
+            };
+
+            btn.Click += (s, e) => 
+            { 
+                if (!string.IsNullOrWhiteSpace(textBox.Text)) inputName = textBox.Text.Trim(); 
+                window.DialogResult = true; 
+            };
+
+            stack.Children.Add(text);
+            stack.Children.Add(textBox);
+            stack.Children.Add(btn);
+            window.Content = stack;
+
+            window.ShowDialog();
+        });
+        
+        return inputName;
+    }
+    
     [RelayCommand]
     private void CancelScan()
     {
@@ -728,8 +910,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         bool deleteFiles = false;
         if (!string.IsNullOrEmpty(folderPath) && Directory.Exists(folderPath))
         {
+            // ✅ 전체 경로 대신 폴더 이름만 추출
+            string folderName = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            
+            // ✅ 깔끔한 메시지 구성
+            string message = $"Are you sure you want to delete this study and its files from disk?\n\n" +
+                             $"ID: {study.UserTag}\n" +
+                             $"Study: {study.Title}\n" +
+                             $"Folder: {folderName}";
+
             var result = MessageBox.Show(
-                $"Also delete study files from disk?\n\n{folderPath}",
+                message,
                 "Delete Study",
                 MessageBoxButton.YesNoCancel,
                 MessageBoxImage.Question);
@@ -999,20 +1190,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Per-measurement recording (multiple simultaneous)
         if (_recordingMeasurements.Count > 0)
         {
-            var totalWritten = 0;
             foreach (var activeMeasurement in _recordingMeasurements)
             {
-                if (activeMeasurement.TryWriteReading(deviceId, reading, LogTickThreshold))
-                    totalWritten++;
+                // ✅ 바뀐 함수인 UpdateReading 사용 (카운트는 타이머가 알아서 함)
+                activeMeasurement.UpdateReading(deviceId, reading);
             }
 
-            if (totalWritten > 0)
-            {
-                var totalSamples = _recordingMeasurements.Sum(m => m.RecordedSampleCount);
-                RecordedSampleCountDisplay = totalSamples;
-                StatusMessage = $"Recording {_recordingMeasurements.Count} measurements - {totalSamples} total samples";
-            }
-
+            var totalSamples = _recordingMeasurements.Sum(m => m.RecordedSampleCount);
+            RecordedSampleCountDisplay = totalSamples;
+            
             var recordingElapsed = DateTime.Now - _recordingStartTime;
             RecordingTime = recordingElapsed.ToString(@"hh\:mm\:ss");
         }
@@ -1040,6 +1226,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             deviceItem.IsConnected = false;
             deviceItem.CurrentPressure = "---";
+        }
+
+        // =========================================================
+        // ✅ [추가] 에러(끊김) 발생 시 해당 장비 값을 'Err'로 기록하도록 전달
+        // =========================================================
+        foreach (var measurement in _recordingMeasurements)
+        {
+            measurement.SetDeviceError(payload.DeviceId);
         }
 
         StatusMessage = $"Connection lost ({payload.DeviceId}): {payload.Error.Message}";
@@ -1312,4 +1506,6 @@ public sealed partial class NewStudyDeviceOption : ObservableObject
 
     [ObservableProperty]
     private bool _isSelected;
+
+    
 }

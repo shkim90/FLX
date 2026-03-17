@@ -7,7 +7,7 @@
         xmlns:vm="clr-namespace:HVG2020B.Viewer.ViewModels"
         xmlns:converters="clr-namespace:HVG2020B.Viewer.Converters"
         mc:Ignorable="d"
-        Title="HVG-2020B Viewer"
+        Title="FLX Viewer"
         Height="700" Width="1100"
         MinHeight="500" MinWidth="900"
         Background="{StaticResource BackgroundBrush}"
@@ -198,13 +198,17 @@
                     </Grid>
                 </Border>
 
-                <StackPanel Grid.Row="3" Orientation="Horizontal">
-                    <Button Content="Scan" Padding="10,6"
-                            Command="{Binding ScanForDevicesCommand}"
-                            Foreground="White" Background="{StaticResource PrimaryBrush}"/>
-                    <Button Content="Emulator" Padding="10,6" Margin="6,0,0,0"
-                            Command="{Binding AddEmulatorDeviceCommand}"
-                            Foreground="White" Background="{StaticResource EmulatorBrush}"/>
+                <StackPanel Grid.Row="3" Orientation="Vertical">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8" HorizontalAlignment="Right">
+                        <Button Content="Emulator" Padding="10,6"
+                                Command="{Binding AddEmulatorDeviceCommand}"
+                                Foreground="White" Background="{StaticResource EmulatorBrush}"/>
+                    </StackPanel>
+                    
+                    <Button Content="Auto Detect &amp; Connect" Padding="10,8"
+                            Command="{Binding AutoConnectAllDevicesCommand}"
+                            Foreground="White" Background="{StaticResource SuccessBrush}"
+                            FontWeight="Bold"/>
                 </StackPanel>
             </Grid>
         </Border>

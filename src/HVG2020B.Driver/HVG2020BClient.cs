@@ -44,7 +44,8 @@ public sealed class HVG2020BClient : IGaugeDevice
     #region IGaugeDevice Implementation
 
     /// <inheritdoc />
-    public string DeviceId { get; }
+    // 수정 전: public string DeviceId { get; }
+    public string DeviceId { get; private set; } // ⬅️ private set 추가
 
     /// <inheritdoc />
     public string DeviceType => "HVG-2020B";
@@ -230,7 +231,7 @@ public sealed class HVG2020BClient : IGaugeDevice
     /// <param name="portName">COM port name (e.g., "COM3")</param>
     /// <param name="settings">Serial port settings</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    public Task ConnectAsync(string portName, HVGSerialSettings settings, CancellationToken cancellationToken = default)
+    public async Task ConnectAsync(string portName, HVGSerialSettings settings, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -251,7 +252,7 @@ public sealed class HVG2020BClient : IGaugeDevice
             _serialPort = new SerialPort
             {
                 PortName = portName,
-                BaudRate = settings.Mode == HVGConnectionMode.Rs232 ? settings.BaudRate : 9600, // USB ignores this
+                BaudRate = settings.Mode == HVGConnectionMode.Rs232 ? settings.BaudRate : 9600,
                 DataBits = settings.DataBits,
                 Parity = settings.Parity,
                 StopBits = settings.StopBits,
@@ -274,7 +275,34 @@ public sealed class HVG2020BClient : IGaugeDevice
             }
         }
 
-        return Task.CompletedTask;
+        // =========================================================
+        // 단위 변경 및 시리얼 넘버 획득 (lock 밖에서 실행)
+        // =========================================================
+        _serialPort.DiscardInBuffer();
+        
+        // 1. 단위 변경 (mbar)
+        _serialPort.Write("s22=1\r"); 
+        await Task.Delay(100, cancellationToken);
+        _serialPort.DiscardInBuffer();
+
+        // 2. 시리얼 넘버 요청 (s68)
+        var snBytes = Encoding.ASCII.GetBytes("s68\r");
+        await _serialPort.BaseStream.WriteAsync(snBytes, 0, snBytes.Length, cancellationToken);
+        await _serialPort.BaseStream.FlushAsync(cancellationToken);
+        
+        // 시리얼 넘버 읽기
+        string snResponse = await ReadUntilPromptAsync(_serialPort, cancellationToken);
+        
+        // 응답(예: 149168307)에서 찌꺼기 꺾쇠(>) 제거
+        string sn = snResponse.Replace(">", "").Trim();
+        if (!string.IsNullOrEmpty(sn))
+        {
+            DeviceId = $"HVG-2020B_{sn}";
+            DisplayName = DeviceId;
+        }
+        // =========================================================
+        
+        // ⭐ 주의: 이곳에 있던 return Task.CompletedTask; 는 삭제해야 합니다.
     }
 
     /// <inheritdoc />
